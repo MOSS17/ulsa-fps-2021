@@ -1,10 +1,13 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using MLAPI;
+using MLAPI.NetworkVariable;
+using UnityEngine.UI;
 
 [RequireComponent(typeof(Rigidbody))]
 
-public class PlayerController : MonoBehaviour
+public class PlayerController : NetworkBehaviour
 {
     Rigidbody rb;
     PlayerInputs playerInputs;
@@ -29,10 +32,54 @@ public class PlayerController : MonoBehaviour
 
     [SerializeField] List<Weapon> weapons;
     int weaponIndex = 0;
+    AudioSource audioSource;
+    [SerializeField] AudioClip walkFootStepSFX;
+    [SerializeField] AudioClip runFootStepSFX;
+    [SerializeField, Range(-2f, 2f)] float walkFootStepPitch = 1;
+    [SerializeField, Range(-2f, 2f)] float runFootStepPitch = 1;
+    [SerializeField] AudioClip jumpoSFX;
+    AudioClip WeaponsShotSFX;
+    [SerializeField] AudioClip WeaponsChangeSFX;
+    [SerializeField] NetworkVariableFloat health = new NetworkVariableFloat(20f);
+    [SerializeField] Slider sldHealth;
+    [SerializeField] Button btnHealthTest;
+
+    public override void NetworkStart()
+    {
+        base.NetworkStart();
+        btnHealthTest.onClick.AddListener(()=>{
+            if(IsLocalPlayer)
+            {
+                health.Value--;
+            }
+        });
+        health.OnValueChanged += (float oldValue, float newValue)=>{
+            if(IsOwner && IsClient)
+            {
+                sldHealth.value = health.Value;
+            }
+            else
+            {
+                sldHealth.gameObject.SetActive(false);
+                btnHealthTest.gameObject.SetActive(false);
+            }
+        };
+        /* foreach(MLAPI.Connection.NetworkClient client in NetworkManager.Singleton.ConnectedClientsList)
+        {
+            Debug.Log(client.PlayerObject.name);
+        } */
+        /* NetworkManager.Singleton.OnClientConnectedCallback += client =>{
+            Debug.Log(client);
+        }; */
+        NetworkObject.name = Gamemanager.instance.currentUsername;
+        Debug.Log(NetworkObject.name);
+        //NetworkManager.Singleton.LocalClientId;
+    }
 
     void Awake() {
         rb ??= GetComponent<Rigidbody>();
         playerInputs ??= new PlayerInputs();
+        audioSource ??= GetComponent<AudioSource>();
     }
 
     void OnEnable() {
@@ -45,17 +92,76 @@ public class PlayerController : MonoBehaviour
     // Start is called before the first frame update
     void Start()
     {
-        Cursor.lockState = CursorLockMode.Locked;
-        playerInputs.Gameplay.Jump.performed += _ => Jump();
-        playerInputs.Gameplay.Run.performed += _ => augmentedSpeed = augmentedFactor;
-        playerInputs.Gameplay.Run.canceled += _ => augmentedSpeed = baseSpeed;
-        playerInputs.Gameplay.Shoot.performed += _ => CurrentWeapon.Shoot();
+        if(IsLocalPlayer)
+        {
+            //Cursor.lockState = CursorLockMode.Locked;
+            playerInputs.Gameplay.Jump.performed += _ => Jump();
+            playerInputs.Gameplay.Run.performed += _ => Run();
+            playerInputs.Gameplay.Run.canceled += _ => CancelRun();
+            playerInputs.Gameplay.Shoot.performed += _ => Shoot();
+            playerInputs.Gameplay.Movement.performed += _ => Movement();
+            playerInputs.Gameplay.Movement.canceled += _ => CancelMovement();
+        }else
+        {
+            camTrs.gameObject.SetActive(false);
+        }
+    }
+
+    void Shoot()
+    {
+        CurrentWeapon.Shoot();
+        WeaponsShotSFX = CurrentWeapon.shootSFX;
+        audioSource.PlayOneShot(WeaponsShotSFX);
+    }
+
+    void Run()
+    {
+        augmentedSpeed = augmentedFactor;
+
+        if(!Grounding) return;
+        audioSource.clip = runFootStepSFX;
+        audioSource.loop = true;
+        audioSource.pitch = runFootStepPitch;
+        audioSource?.Play();
+    }
+
+    void CancelRun()
+    {
+        augmentedSpeed = baseSpeed;
+        audioSource?.Stop();
+        audioSource.clip = null;
+        audioSource.loop = false;
+        audioSource.pitch = 1f;
+        if(Axis != Vector2.zero)
+        {
+            audioSource.clip = walkFootStepSFX;
+            audioSource.loop = true;
+            audioSource.pitch = walkFootStepPitch;
+            audioSource?.Play();
+        }
+    }
+
+    void Movement()
+    {
+        if(audioSource.isPlaying || !Grounding) return;
+        audioSource.clip = walkFootStepSFX;
+        audioSource.loop = true;
+        audioSource.pitch = walkFootStepPitch;
+        audioSource.Play();
+    }
+
+    void CancelMovement()
+    {
+        audioSource?.Stop();
+        audioSource.clip = null;
+        audioSource.loop = false;
     }
 
     // Update is called once per frame
     void Update()
     {
-
+        if(!IsLocalPlayer) return;
+        //if(!NetworkManager.Singleton.IsHost) return;
         camRotationAmounthY += CamAxis.x * camRotSpeed * Time.deltaTime;
         rb.rotation = Quaternion.Euler(rb.rotation.x, camRotationAmounthY, rb.rotation.z);
         rb.position += Forward *moveSpeed * augmentedSpeed * Time.deltaTime;
@@ -69,6 +175,9 @@ public class PlayerController : MonoBehaviour
 
         if(WheelAxisYClamped != 0f)
         {
+            //audio fx inicio
+            audioSource.PlayOneShot(WeaponsChangeSFX);
+            //audio fx fin
             CurrentWeapon.Active(false);
             //inicio cambio de arma
             /*if(WheelAxisYClampInt + weaponIndex >= 0 && WheelAxisYClampInt + weaponIndex < weapons.Count)
@@ -109,6 +218,9 @@ public class PlayerController : MonoBehaviour
     void Jump()
     {
         if(!Grounding) return;
+        //audioSource.clip = jumpoSFX;
+        audioSource?.Stop();
+        audioSource.PlayOneShot(jumpoSFX, 7f);
         rb.AddForce(JumpDirection, ForceMode.Impulse);
     }
 
@@ -138,6 +250,8 @@ public class PlayerController : MonoBehaviour
     float WheelAxisY => playerInputs.Gameplay.WeaponChange.ReadValue<float>();
 
     Weapon CurrentWeapon => weapons[weaponIndex];
+
+    public NetworkVariableFloat Health => health;
 
     //Weapon CurrentWeapon => weapons[0];
     
